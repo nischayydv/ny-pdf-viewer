@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Protected document</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<main class="center">
+  <form class="card" method="post" action="/s/{{TOKEN}}/unlock" autocomplete="off">
+    <div class="lock">🔒</div>
+    <h1>{{TITLE}}</h1>
+    <p class="sub">This document is protected. Enter the password you were given to view it.</p>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required autofocus>
+    <div class="err">{{ERROR}}</div>
+    <button class="btn block" type="submit">Unlock document</button>
+    <div class="notice">View only. For security, your IP address, device and browser details are recorded when you open this document.</div>
+  </form>
+</main>
+</body>
+</html>

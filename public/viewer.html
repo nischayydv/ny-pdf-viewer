@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>{{TITLE}}</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body class="viewer" data-token="{{TOKEN}}">
+<div class="vbar">
+  <div class="title">{{TITLE}}</div>
+  <button class="btn ghost sm" id="zout" title="Zoom out">−</button>
+  <span class="pg" id="zlabel">100%</span>
+  <button class="btn ghost sm" id="zin" title="Zoom in">+</button>
+  <span class="pg" id="pager">–</span>
+</div>
+<div class="vstage" id="stage"><div class="vmsg" id="msg">Loading document…</div></div>
+<div class="shield hidden" id="shield">Window inactive. Click to continue viewing.</div>
+<script src="/vendor/pdfjs/pdf.min.js"></script>
+<script src="/assets/viewer.js"></script>
+</body>
+</html>
