@@ -1,19 +1,27 @@
 {
   "name": "secure-pdf-share",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "engines": { "node": "22.x" },
+  "scripts": {
+    "start": "node server.js",
+    "totp": "node scripts/totp.js",
+    "hash": "node scripts/hash.js"
+  },
+  "engines": {
+    "node": "22.x"
+  },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.65",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.3.0",
+    "compression": "^1.8.2",
     "cookie-parser": "^1.4.6",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.0",
     "multer": "^2.0.2",
-    "pdfjs-dist": "3.11.174",
+    "pdfjs-dist": "^4.10.38",
     "ua-parser-js": "^1.0.39"
   }
 }

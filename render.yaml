@@ -1,22 +1,31 @@
+# Render Blueprint — New → Blueprint → pick this repo.
+# A persistent disk is REQUIRED (uploaded PDFs, the database and the access log live on it),
+# and disks need a paid instance type.
 services:
   - type: web
     name: secure-pdf-share
     runtime: node
-    plan: starter            # persistent disks need a paid instance
-    buildCommand: npm install
+    plan: starter
+    buildCommand: npm ci --omit=dev || npm install --omit=dev
     startCommand: npm start
-    healthCheckPath: /admin
+    healthCheckPath: /healthz
+    autoDeploy: true
     envVars:
       - key: NODE_VERSION
-        value: 22.12.0       # better-sqlite3 has prebuilt binaries for Node 22 LTS (not for 26)
+        value: 22.12.0          # better-sqlite3 ships prebuilt binaries for Node 22 LTS
       - key: NODE_ENV
         value: production
       - key: DATA_DIR
         value: /var/data
+      - key: TRUST_PROXY_HOPS
+        value: "1"              # check Admin → Security → "Your connection" and raise to 2 if the IP shown is not yours
       - key: ADMIN_PASSWORD
-        sync: false          # you enter this in the Render dashboard
+        sync: false             # you type this in the Render dashboard (12+ characters)
       - key: SESSION_SECRET
         generateValue: true
+      - key: DATA_KEY           # encrypts stored PDFs. Generated once. NEVER change or delete it afterwards.
+        generateValue: true
+      # Optional, add later in the dashboard:  ADMIN_TOTP_SECRET (2FA), WEBHOOK_URL, GEO_LOOKUP=off, APP_NAME, LOG_RETENTION_DAYS
     disk:
       name: pdf-data
       mountPath: /var/data
