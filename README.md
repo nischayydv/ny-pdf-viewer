@@ -39,12 +39,22 @@ The viewer never receives your PDF. The server draws each page into an image, bu
 4. Open `https://<your-service>.onrender.com/admin`.
 5. **Admin → Security → "Your connection"**: the *Detected IP* must be your real public IP. If it shows something else, set `TRUST_PROXY_HOPS=2` and redeploy.
 
-### Turn on 2FA (strongly recommended)
-```bash
-npm install
-npm run totp
-```
-Add the printed secret to Google Authenticator / Authy / 1Password ("enter a setup key"), then add it in Render → Environment as `ADMIN_TOTP_SECRET`. From then on the admin login asks for the 6-digit code.
+### Turn on 2FA (strongly recommended, no terminal needed)
+1. Sign in to the admin panel, open **Security** and press **Set up 2FA**.
+2. Scan the QR code with Google Authenticator / Authy / Microsoft Authenticator / 1Password (or type the setup key).
+3. Enter the 6-digit code and press **Turn on 2FA**.
+
+From then on the login asks for password + code. The key is stored encrypted in the app database. With `MONGODB_URI` set (below) it survives restarts; without a disk or MongoDB it is wiped on restart. `ADMIN_TOTP_SECRET` (made with `npm run totp`) still works and is optional.
+
+### Keep your data after restarts (MongoDB) — needed on free hosting
+Render's free plan has no disk, so uploads, links, logs and 2FA would be erased on every restart. Set one environment variable and the app keeps them safe in MongoDB Atlas:
+
+1. In Atlas: **Network Access → Add IP Address → Allow access from anywhere (0.0.0.0/0)** (Render's free IPs change).
+2. In Render → Environment add `MONGODB_URI` = your Atlas connection string (`mongodb+srv://USER:PASSWORD@…`). Never put it in the code or on GitHub.
+3. Set a permanent `DATA_KEY` (any long random text) and keep it forever. PDFs and the 2FA secret are encrypted with it, so changing it makes the backup unreadable.
+4. Run **one** instance only. Check Admin → Security → "Data survives restarts".
+
+How it works: the local database is copied to MongoDB (about every 20 seconds after a change, and once more on shutdown), together with the already-encrypted PDFs. On boot the app restores them first. If MongoDB cannot be reached, the app refuses to start instead of starting empty, so a good backup is never overwritten. A hard crash can lose up to ~20 seconds of activity. The free Atlas tier holds 512 MB.
 
 ### Upgrading an existing v1 deployment
 Replace the repo contents with this version (keep the same service and disk), commit and push.
@@ -63,7 +73,8 @@ If you boot v2 without `DATA_KEY`, the key falls back to a value derived from `S
 | `ADMIN_PASSWORD` | yes | Admin password (12+ chars), or a bcrypt hash from `npm run hash -- "passphrase"` |
 | `SESSION_SECRET` | yes | 24+ random characters |
 | `DATA_KEY` | recommended | Encrypts stored PDFs. Set once, keep forever |
-| `ADMIN_TOTP_SECRET` | recommended | Enables admin 2FA (`npm run totp`) |
+| `MONGODB_URI` | recommended on free hosting | Backs up data to MongoDB so restarts lose nothing |
+| `ADMIN_TOTP_SECRET` | optional | Forces admin 2FA from env; otherwise set up in Admin → Security |
 | `DATA_DIR` | on hosts with a disk | Where the database and PDFs live (Render: `/var/data`) |
 | `TRUST_PROXY_HOPS` | default `1` | Reverse proxies in front of the app; decides which IP is "the viewer's" |
 | `WEBHOOK_URL` | optional | Slack/Discord/Teams alert on opens, 3 wrong passwords, lockouts, device-limit hits |

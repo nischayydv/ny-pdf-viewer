@@ -12,6 +12,7 @@ const totp = require("../lib/totp");
 const vault = require("../lib/vault");
 const render = require("../lib/render");
 const { notify } = require("../lib/notify");
+const qrcode = require("qrcode");
 const { db, cfg, log, linkState, publicBase } = core;
 
 const router = express.Router();
@@ -20,6 +21,14 @@ const TMP_DIR = path.join(cfg.dataDir, "tmp");
 const ADM = (cfg.isProd ? "__Host-" : "") + "adm";
 const ADMIN_TTL_MS = 8 * 3600 * 1000;
 const admCookie = (maxAge) => ({ httpOnly: true, sameSite: "strict", secure: cfg.isProd, maxAge, path: "/" });
+// ---- two-factor secret: from the environment (ADMIN_TOTP_SECRET) or set up inside the panel (stored encrypted in the database)
+const getSetting = db.prepare("SELECT value FROM settings WHERE key = ?");
+function storedTotp() {
+  const r = getSetting.get("totp_secret"); if (!r) return "";
+  try { return vault.decryptBuffer(Buffer.from(r.value, "base64")).toString(); } catch { return ""; }
+}
+const activeTotp = () => cfg.totpSecret || storedTotp();
+const pending2fa = new Map(); // admin session id -> { secret, exp }  (never written to disk until confirmed)
 const uaHash = (req) => U.sha256(req.get("user-agent") || "");
 
 // ================= authentication =================
@@ -41,7 +50,7 @@ function passwordOk(pw) {
 router.get("/admin", (req, res) => {
   res.set({ "Cache-Control": "no-store" }).sendFile(path.join(__dirname, "..", "public", "admin.html"));
 });
-router.get("/admin/status", (req, res) => res.set("Cache-Control", "no-store").json({ totp: !!cfg.totpSecret, app: cfg.appName, signedIn: !!adminSession(req) }));
+router.get("/admin/status", (req, res) => res.set("Cache-Control", "no-store").json({ totp: !!activeTotp(), app: cfg.appName, signedIn: !!adminSession(req) }));
 
 router.post("/admin/login", loginLimiter, async (req, res) => {
   const ip = U.normIp(req.ip);
@@ -49,12 +58,13 @@ router.post("/admin/login", loginLimiter, async (req, res) => {
   const { password, code } = req.body || {};
   const pwOk = passwordOk(password);
   // the one-time code is only consumed once the password is right, so a typo'd password never burns a valid code
-  const codeOk = cfg.totpSecret ? (pwOk && totp.verify(cfg.totpSecret, code)) : true;
+  const secret2fa = activeTotp();
+  const codeOk = secret2fa ? (pwOk && totp.verify(secret2fa, code)) : true;
   if (!pwOk || !codeOk) {
     recordFail(ip);
     log(req, null, "admin_login_failed", { note: !pwOk ? "bad password" : "bad 2FA code" });
     await new Promise((r) => setTimeout(r, 600)); // slow down guessing
-    return res.status(401).json({ error: cfg.totpSecret ? "Invalid password or authentication code." : "Invalid password." });
+    return res.status(401).json({ error: secret2fa ? "Invalid password or authentication code." : "Invalid password." });
   }
   fails.delete(ip);
   const id = U.rand(9), secret = U.rand(32);
@@ -94,7 +104,37 @@ router.post("/api/logout-everywhere", requireAdmin, (req, res) => {
   log(req, null, "admin_logout_all");
   res.json({ ok: true });
 });
-router.get("/api/me", requireAdmin, (req, res) => res.json({ ok: true, app: cfg.appName, totp: !!cfg.totpSecret }));
+router.get("/api/me", requireAdmin, (req, res) => res.json({ ok: true, app: cfg.appName, totp: !!activeTotp() }));
+
+// ================= two-factor setup (inside the panel) =================
+const twofaLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 15, standardHeaders: true, legacyHeaders: false, message: { error: "Too many attempts. Try again later." } });
+router.post("/api/2fa/start", requireAdmin, twofaLimiter, async (req, res) => {
+  if (cfg.totpSecret) return res.status(400).json({ error: "2FA is managed by the ADMIN_TOTP_SECRET environment variable on your host." });
+  if (storedTotp()) return res.status(400).json({ error: "2FA is already on. Disable it first to set it up again." });
+  const secret = totp.generateSecret();
+  pending2fa.set(req.admin.id, { secret, exp: Date.now() + 10 * 60 * 1000 });
+  const label = encodeURIComponent(cfg.appName);
+  const uri = `otpauth://totp/${label}:admin?secret=${secret}&issuer=${label}&algorithm=SHA1&digits=6&period=30`;
+  res.json({ secret, uri, qr: await qrcode.toDataURL(uri, { margin: 1, width: 232, errorCorrectionLevel: "M" }) });
+});
+router.post("/api/2fa/enable", requireAdmin, twofaLimiter, (req, res) => {
+  const p = pending2fa.get(req.admin.id);
+  if (!p || p.exp < Date.now()) return res.status(400).json({ error: "Setup expired. Start again." });
+  if (!totp.verify(p.secret, (req.body || {}).code)) return res.status(400).json({ error: "That code didn't match. Check the code in your app and try again." });
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('totp_secret', ?)").run(vault.encryptBuffer(Buffer.from(p.secret)).toString("base64"));
+  pending2fa.delete(req.admin.id);
+  log(req, null, "admin_2fa_enabled");
+  res.json({ ok: true });
+});
+router.post("/api/2fa/disable", requireAdmin, twofaLimiter, (req, res) => {
+  if (cfg.totpSecret) return res.status(400).json({ error: "2FA is managed by the ADMIN_TOTP_SECRET environment variable on your host." });
+  const stored = storedTotp(); if (!stored) return res.json({ ok: true });
+  const b = req.body || {};
+  if (!passwordOk(b.password) || !totp.verify(stored, b.code)) return res.status(401).json({ error: "Wrong password or code." });
+  db.prepare("DELETE FROM settings WHERE key = 'totp_secret'").run();
+  log(req, null, "admin_2fa_disabled");
+  res.json({ ok: true });
+});
 
 // ================= overview =================
 router.get("/api/overview", requireAdmin, (req, res) => {
@@ -321,7 +361,8 @@ router.get("/api/security", requireAdmin, (req, res) => {
   res.json({
     https: req.secure || req.get("x-forwarded-proto") === "https",
     secureCookies: cfg.isProd,
-    totp: !!cfg.totpSecret,
+    totp: !!activeTotp(), totpSource: cfg.totpSecret ? "env" : storedTotp() ? "panel" : null,
+    persist: require("../lib/persist").status(),
     adminHash: cfg.adminIsHash,
     adminPwLen: cfg.adminIsHash ? null : cfg.adminPassword.length,
     separateDataKey: !!process.env.DATA_KEY,

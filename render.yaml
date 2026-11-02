@@ -19,6 +19,8 @@ services:
         value: /var/data
       - key: TRUST_PROXY_HOPS
         value: "1"              # check Admin → Security → "Your connection" and raise to 2 if the IP shown is not yours
+      - key: MONGODB_URI
+        sync: false             # Atlas connection string; keeps data across restarts
       - key: ADMIN_PASSWORD
         sync: false             # you type this in the Render dashboard (12+ characters)
       - key: SESSION_SECRET

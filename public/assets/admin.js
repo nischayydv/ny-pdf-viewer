@@ -501,10 +501,12 @@
       var checks = h("div", { class: "card" }, [h("div", { class: "card-head" }, h("h3", {}, "Protection status")), h("div", { class: "check-list" }, [
         ck(s.https ? "ok" : "warn", "Encrypted connection (HTTPS)", s.https ? "Traffic between viewers and this server is encrypted." : "This connection is not HTTPS. Use your host's https:// address."),
         ck(s.secureCookies ? "ok" : "warn", "Hardened cookies", s.secureCookies ? "Session cookies are HttpOnly, Secure and SameSite, with __Host-/__Secure- prefixes." : "Running in development mode: set NODE_ENV=production."),
-        ck(s.totp ? "ok" : "warn", "Two-factor sign-in for this admin panel", s.totp ? "An authenticator code is required at every sign-in." : "Not enabled. Run `npm run totp`, then set ADMIN_TOTP_SECRET in your host's environment settings."),
+        ck(s.totp ? "ok" : "warn", "Two-factor sign-in for this admin panel", s.totp ? "An authenticator code is required at every sign-in." : "Not enabled. Use the \u201cSet up 2FA\u201d card on this page — it takes about a minute."),
         ck(!weakPw ? "ok" : "warn", "Admin password strength", s.adminHash ? "Stored as a bcrypt hash." : weakPw ? "Your admin password is " + s.adminPwLen + " characters. Use a 12+ character passphrase." : "Strong length."),
         ck("ok", "PDFs encrypted at rest (AES-256-GCM)", s.separateDataKey ? "Using a dedicated DATA_KEY." : "Using a key derived from SESSION_SECRET. Set a separate permanent DATA_KEY so rotating SESSION_SECRET can never lock you out of your files."),
         ck("ok", "Original PDF never leaves the server", "Pages are rendered to watermarked images on the server. There is no file for viewers to download or extract."),
+        ck(s.persist && s.persist.enabled ? (s.persist.lastError ? "warn" : "ok") : "warn", "Data survives restarts (MongoDB backup)",
+          s.persist && s.persist.enabled ? (s.persist.lastError ? "Last backup problem: " + s.persist.lastError : s.persist.lastBackup ? "Last backup: " + new Date(s.persist.lastBackup).toLocaleString() + ". Links, logs, 2FA and PDFs are restored automatically after a restart." : "Connected. The first backup is being made…") : "Not set up. On free hosting without a disk, everything is erased when the server restarts. Set MONGODB_URI to keep your data."),
         ck(s.geo ? "ok" : "warn", "IP location & ISP lookup", s.geo ? "Enabled (uses ipwho.is). Set GEO_LOOKUP=off to disable." : "Disabled — location details will be limited."),
         ck(s.webhook ? "ok" : "warn", "Instant alerts", s.webhook ? "Webhook alerts are active (opens, repeated failures, lockouts)." : "Optional: set WEBHOOK_URL (Slack/Discord) to be notified when a link is opened."),
         ck("ok", "Log retention", "Activity older than " + s.retentionDays + " days is deleted automatically (LOG_RETENTION_DAYS)."),
@@ -517,8 +519,47 @@
         h("form", { class: "toolbar", onsubmit: function (e) { e.preventDefault(); api("POST", "/api/blocked-ips", { ip: ipIn.value.trim(), reason: why.value }).then(function (r) { toast("Blocked" + (r.ended ? " — ended " + plural(r.ended, "session") : ""), "ok"); pageSecurity(); }).catch(function (x) { toast(x.message, "bad"); }); } }, [ipIn, why, btn("Block", { type: "submit", cls: "btn-primary", icon: "ban" })]),
         s.blocked.length ? h("div", { class: "list" }, s.blocked.map(function (b) { return h("div", { class: "list-item" }, [h("div", { class: "grow" }, [h("div", { class: "mono cell-main" }, b.ip), h("div", { class: "cell-sub" }, (b.reason || "No reason") + " · " + dt(b.created_at))]), btn("Unblock", { cls: "btn-sm", onclick: function () { api("DELETE", "/api/blocked-ips/" + encodeURIComponent(b.ip)).then(function () { toast("Unblocked", "ok"); pageSecurity(); }); } })]); })) : h("div", { class: "empty" }, "No blocked addresses.")]);
       var sess = h("div", { class: "card card-pad" }, [h("h3", { style: { marginBottom: ".3rem" } }, "Admin sessions"), h("p", { class: "muted", style: { marginBottom: "1rem" } }, plural(s.adminSessions, "active sign-in") + ". Sign out everywhere if you used a shared computer."), btn("Sign out of all devices", { icon: "logout", cls: "btn-danger", onclick: function () { confirmBox("Sign out everywhere?", "All admin sessions, including this one, end now.", "Sign out all", true).then(function (ok) { if (ok) api("POST", "/api/logout-everywhere", {}).then(showLogin); }); } })]);
-      mount(h("div", { class: "page" }, [pageHead("Security", "Protection status, network checks and blocked addresses."), h("div", { class: "grid-2" }, [checks, h("div", { style: { display: "grid", gap: "1rem", alignContent: "start" } }, [conn, sess])]), bl]));
+      mount(h("div", { class: "page" }, [pageHead("Security", "Protection status, network checks and blocked addresses."), h("div", { class: "grid-2" }, [checks, h("div", { style: { display: "grid", gap: "1rem", alignContent: "start" } }, [twofaCard(s), conn, sess])]), bl]));
     });
+  }
+
+  // ---- two-factor setup, entirely inside the panel
+  function twofaCard(s) {
+    var card = h("div", { class: "card card-pad" });
+    card.append(h("h3", { style: { marginBottom: ".3rem" } }, "Two-factor authentication"),
+      h("p", { class: "muted", style: { marginBottom: "1rem" } }, s.totp ? "On — every sign-in needs a 6-digit code from your authenticator app." : "Off — anyone with your password can sign in. Add a second step using an authenticator app."));
+    if (s.totpSource === "env") card.append(h("div", { class: "alert alert-info", style: { margin: 0 } }, "Managed by the ADMIN_TOTP_SECRET setting on your host."));
+    else if (s.totp) card.append(btn("Turn off 2FA", { cls: "btn-danger btn-sm", onclick: disable2fa }));
+    else card.append(btn("Set up 2FA", { icon: "shield", cls: "btn-primary", onclick: setup2fa }));
+    return card;
+  }
+  function setup2fa() {
+    api("POST", "/api/2fa/start", {}).then(function (r) {
+      var code = h("input", { type: "text", inputmode: "numeric", maxlength: "6", autocomplete: "one-time-code", placeholder: "123456", pattern: "[0-9]*", style: { maxWidth: "11rem", fontSize: "1.2rem", letterSpacing: ".25em", textAlign: "center" } });
+      var err = h("div", { class: "alert alert-bad hidden" }), enable;
+      var body = h("div", {}, [
+        h("div", { class: "sect" }, "1 · Scan with your authenticator app"),
+        h("div", { style: { display: "flex", gap: "1.2rem", flexWrap: "wrap", alignItems: "center" } }, [
+          h("img", { src: r.qr, alt: "QR code for two-factor setup", width: "232", height: "232", style: { borderRadius: "10px", border: "1px solid var(--line)", background: "#fff" } }),
+          h("div", { class: "grow", style: { minWidth: "200px" } }, [h("p", { class: "muted" }, "Use Google Authenticator, Authy, Microsoft Authenticator or 1Password. Can't scan? Choose “Enter a setup key” and type this:"),
+            h("div", { class: "secret", style: { marginTop: ".6rem", fontSize: ".95rem" } }, r.secret.replace(/(.{4})/g, "$1 ").trim()), h("div", { style: { marginTop: ".6rem" } }, btn("Copy key", { icon: "copy", cls: "btn-sm", onclick: function () { copy(r.secret, "Key copied"); } }))]),
+        ]),
+        h("div", { class: "sect" }, "2 · Enter the 6-digit code it shows"), code, err,
+        h("div", { class: "alert alert-warn", style: { marginTop: "1rem", marginBottom: 0 } }, "The key is saved encrypted in this app's database. If your host wipes data on restart (free hosting without a disk), 2FA turns itself off and you can set it up again."),
+      ]);
+      var m = modal({ title: "Set up two-factor sign-in", body: body, foot: function (close) { enable = btn("Turn on 2FA", { cls: "btn-primary", onclick: submit }); return [btn("Cancel", { onclick: close }), enable]; } });
+      code.addEventListener("keydown", function (e) { if (e.key === "Enter") submit(); });
+      function submit() {
+        err.classList.add("hidden"); enable.disabled = true;
+        api("POST", "/api/2fa/enable", { code: code.value.replace(/\s/g, "") }).then(function () { m.close(); S.totp = true; toast("Two-factor sign-in is on", "ok"); pageSecurity(); })
+          .catch(function (x) { err.textContent = x.message; err.classList.remove("hidden"); enable.disabled = false; code.select(); });
+      }
+    }).catch(function (x) { toast(x.message, "bad"); });
+  }
+  function disable2fa() {
+    var pw = h("input", { type: "password", autocomplete: "current-password" }), code = h("input", { type: "text", inputmode: "numeric", maxlength: "6", placeholder: "6-digit code" }), err = h("div", { class: "alert alert-bad hidden" }), go2;
+    var m = modal({ title: "Turn off two-factor sign-in", body: h("div", {}, [h("p", { class: "muted", style: { marginBottom: "1rem" } }, "Confirm with your password and a current code."), h("div", { class: "field" }, [h("label", {}, "Admin password"), pw]), h("div", { class: "field" }, [h("label", {}, "Authentication code"), code]), err]),
+      foot: function (close) { go2 = btn("Turn off", { cls: "btn-danger", onclick: function () { err.classList.add("hidden"); go2.disabled = true; api("POST", "/api/2fa/disable", { password: pw.value, code: code.value.replace(/\s/g, "") }).then(function () { m.close(); S.totp = false; toast("2FA turned off", "ok"); pageSecurity(); }).catch(function (x) { err.textContent = x.message; err.classList.remove("hidden"); go2.disabled = false; }); } }); return [btn("Cancel", { onclick: close }), go2]; } });
   }
 
   // =============================================================== boot
